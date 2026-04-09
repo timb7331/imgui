@@ -6,6 +6,7 @@
 // - Documentation        https://dearimgui.com/docs (same as your local docs/ folder).
 // - Introduction, links and more at the top of imgui.cpp
 
+#define _CRT_SECURE_NO_WARNINGS
 #include "imgui.h"
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
@@ -26,6 +27,124 @@ void CleanupDeviceD3D();
 void CreateRenderTarget();
 void CleanupRenderTarget();
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+#include <stdio.h>
+void Issue7994()
+{
+    if (!ImGui::Begin("#7994"))
+    {
+        ImGui::End();
+        return;
+    }
+
+    static ImGuiSelectionBasicStorage selection;
+
+    const int ITEMS_COUNT = 1000;
+    const int COLUMN_COUNT = 5;
+    ImGui::Text("Selection: %d/%d", selection.Size, ITEMS_COUNT);
+    if (ImGui::BeginTable("##Basket", COLUMN_COUNT, ImGuiTableFlags_ScrollY | ImGuiTableFlags_ScrollX | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter, ImVec2(500, 300)))
+    {
+        float w = 100.0f;
+        ImGui::TableSetupColumn("Object", ImGuiTableColumnFlags_WidthFixed, w);
+        ImGui::TableSetupColumn("One", ImGuiTableColumnFlags_WidthFixed, w);
+        ImGui::TableSetupColumn("Two", ImGuiTableColumnFlags_WidthFixed, w);
+        ImGui::TableSetupColumn("Three", ImGuiTableColumnFlags_WidthFixed, w);
+        ImGui::TableSetupColumn("Four", ImGuiTableColumnFlags_WidthFixed, w);
+
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableHeadersRow();
+
+        ImGuiMultiSelectFlags flags = ImGuiMultiSelectFlags_ClearOnEscape | ImGuiMultiSelectFlags_BoxSelect2d;
+        ImGuiMultiSelectIO* ms_io = ImGui::BeginMultiSelect(flags, selection.Size, ITEMS_COUNT * COLUMN_COUNT);
+        selection.ApplyRequests(ms_io);
+
+        static const char* ExampleNames[] =
+        {
+            "Artichoke", "Arugula", "Asparagus", "Avocado", "Bamboo Shoots", "Bean Sprouts", "Beans", "Beet", "Belgian Endive", "Bell Pepper",
+            "Bitter Gourd", "Bok Choy", "Broccoli", "Brussels Sprouts", "Burdock Root", "Cabbage", "Calabash", "Capers", "Carrot", "Cassava",
+            "Cauliflower", "Celery", "Celery Root", "Celcuce", "Chayote", "Chinese Broccoli", "Corn", "Cucumber"
+        };
+
+#if 0
+        ImGuiListClipper clipper;
+        clipper.Begin(ITEMS_COUNT);
+        if (ms_io->RangeSrcItem != -1)
+            clipper.IncludeItemByIndex((int)ms_io->RangeSrcItem / COLUMN_COUNT); // Ensure RangeSrc item is not clipped.
+        while (clipper.Step())
+#endif
+        {
+#if 0
+            for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++)
+#else
+            for (int row = 0; row < ITEMS_COUNT; row++)
+#endif
+            {
+                ImGui::TableNextRow();
+
+                for (int col = 0; col < COLUMN_COUNT; col++)
+                {
+                    ImGui::TableNextColumn();
+
+                    int idx = row * COLUMN_COUNT + col;
+
+                    char label[64];
+                    //sprintf(label, "Idx %03d (%03d,%03d): %s", idx, row, col, ExampleNames[row % IM_ARRAYSIZE(ExampleNames)]);
+                    sprintf(label, "Idx %03d (%03d,%03d)", idx, row, col);
+                    bool item_is_selected = selection.Contains((ImGuiID)idx);
+                    ImGui::PushID(idx);
+                    ImGui::SetNextItemSelectionUserData(idx);
+                    ImGui::Selectable(label, item_is_selected, ImGuiSelectableFlags_AllowOverlap);
+                    ImGui::PopID();
+                }
+            }
+        }
+
+        ms_io = ImGui::EndMultiSelect();
+        selection.ApplyRequests(ms_io);
+        ImGui::EndTable();
+    }
+    ImGui::End();
+}
+
+void DemoSelectableEditableInputTextGrid()
+{
+    if (!ImGui::Begin("Selection Test"))
+    {
+        ImGui::End();
+        return;
+    }
+
+    const int COUNT_X = 50; // COUNT_X is the amount of columns
+    const int COUNT_Y = 50; // COUNT_X is the amount of rows
+    const int COUNT = COUNT_X * COUNT_Y;
+    static ImGuiSelectionBasicStorage selection;
+
+    ImGui::Text("Selection: %d/%d", selection.Size, COUNT);
+
+    if (ImGui::BeginTable("Array", COUNT_X, ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY | ImGuiTableFlags_ScrollX | ImGuiTableFlags_SizingFixedSame))
+    {
+        ImGuiMultiSelectIO* ms_io = ImGui::BeginMultiSelect(ImGuiMultiSelectFlags_ClearOnEscape | ImGuiMultiSelectFlags_BoxSelect2d | ImGuiMultiSelectFlags_SelectOnClickAlways, selection.Size, COUNT);
+        selection.ApplyRequests(ms_io);
+        for (int n = 0; n < COUNT; n++)
+        {
+            ImGui::TableNextColumn();//) // Next cell w/ auto-wrap
+                //continue;
+            ImGui::PushID(n);
+            const bool is_selected = selection.Contains((ImGuiID)n);
+            ImGui::SetNextItemSelectionUserData(n);
+            char label[64];
+            sprintf(label, "%04d ", n);
+            ImGui::Selectable(label, is_selected);
+            ImGui::PopID();
+        }
+
+        ms_io = ImGui::EndMultiSelect();
+        selection.ApplyRequests(ms_io);
+
+        ImGui::EndTable();
+    }
+    ImGui::End();
+}
 
 // Main code
 int main(int, char**)
@@ -48,7 +167,7 @@ int main(int, char**)
     }
 
     // Show the window
-    ::ShowWindow(hwnd, SW_SHOWDEFAULT);
+    ::ShowWindow(hwnd, SW_MAXIMIZE);
     ::UpdateWindow(hwnd);
 
     // Setup Dear ImGui context
@@ -132,6 +251,9 @@ int main(int, char**)
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
+
+        Issue7994();
+        DemoSelectableEditableInputTextGrid();
 
         // 1. Show the big demo window (Most of the sample code is in ImGui::ShowDemoWindow()! You can browse its code to learn more about Dear ImGui!).
         if (show_demo_window)

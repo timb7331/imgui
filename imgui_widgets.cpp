@@ -8303,8 +8303,17 @@ void ImGui::MultiSelectItemFooter(ImGuiID id, bool* p_selected, bool* p_pressed)
     if (ms->BoxSelectId != 0)
         if (ImGuiBoxSelectState* bs = GetBoxSelectState(ms->BoxSelectId))
         {
+#if 1
             const bool rect_overlap_curr = bs->BoxSelectRectCurr.Overlaps(g.LastItemData.Rect);
             const bool rect_overlap_prev = bs->BoxSelectRectPrev.Overlaps(g.LastItemData.Rect);
+#else
+            ImRect r_curr = bs->BoxSelectRectCurr;
+            ImRect r_prev = bs->BoxSelectRectPrev;
+            r_curr.ClipWith(g.LastItemData.ClipRect);
+            r_prev.ClipWith(g.LastItemData.ClipRect);
+            const bool rect_overlap_curr = r_curr.Overlaps(g.LastItemData.Rect);
+            const bool rect_overlap_prev = r_prev.Overlaps(g.LastItemData.Rect);
+#endif
             if ((rect_overlap_curr && !rect_overlap_prev && !selected) || (rect_overlap_prev && !rect_overlap_curr))
             {
                 if (storage->LastSelectionSize <= 0 && bs->IsStartedSetNavIdOnce)
