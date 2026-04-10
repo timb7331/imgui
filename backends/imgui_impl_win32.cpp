@@ -929,18 +929,18 @@ float ImGui_ImplWin32_GetDpiScaleForMonitor(void* monitor)
         if (GetDpiForMonitorFn != nullptr)
         {
             GetDpiForMonitorFn((HMONITOR)monitor, MDT_EFFECTIVE_DPI, &xdpi, &ydpi);
-            IM_ASSERT(xdpi == ydpi); // Please contact me if you hit this assert!
-            return xdpi / 96.0f;
+            const UINT effective_dpi = (xdpi > ydpi) ? xdpi : ydpi;
+            return effective_dpi / 96.0f;
         }
     }
 #ifndef NOGDI
     const HDC dc = ::GetDC(nullptr);
     xdpi = ::GetDeviceCaps(dc, LOGPIXELSX);
     ydpi = ::GetDeviceCaps(dc, LOGPIXELSY);
-    IM_ASSERT(xdpi == ydpi); // Please contact me if you hit this assert!
     ::ReleaseDC(nullptr, dc);
 #endif
-    return xdpi / 96.0f;
+    const UINT effective_dpi = (xdpi > ydpi) ? xdpi : ydpi;
+    return effective_dpi / 96.0f;
 }
 
 float ImGui_ImplWin32_GetDpiScaleForHwnd(void* hwnd)
