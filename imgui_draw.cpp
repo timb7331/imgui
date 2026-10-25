@@ -2424,6 +2424,7 @@ ImFontConfig::ImFontConfig()
     ExtraSizeScale = 1.0f;
     GlyphMaxAdvanceX = FLT_MAX;
     RasterizerMultiply = 1.0f;
+    RasterizerGamma = 1.0f;
     RasterizerDensity = 1.0f;
     EllipsisChar = 0;
 }
@@ -2889,9 +2890,49 @@ void ImFontAtlasTextureBlockConvert(const unsigned char* src_pixels, ImTextureFo
 // Post-process hooks may eventually be added here.
 void ImFontAtlasTextureBlockPostProcess(ImFontAtlasPostProcessData* data)
 {
+    // Gamma operator (coverage curve), skipped for colored glyphs
+    if (data->FontSrc->RasterizerGamma != 1.0f && data->FontSrc->RasterizerGamma > 0.0f && !(data->Glyph && data->Glyph->Colored))
+        ImFontAtlasTextureBlockPostProcessGamma(data, data->FontSrc->RasterizerGamma);
+
     // Multiply operator (legacy)
     if (data->FontSrc->RasterizerMultiply != 1.0f)
         ImFontAtlasTextureBlockPostProcessMultiply(data, data->FontSrc->RasterizerMultiply);
+}
+
+void ImFontAtlasTextureBlockPostProcessGamma(ImFontAtlasPostProcessData* data, float gamma)
+{
+    unsigned char lut[256];
+    const float inv_gamma = 1.0f / gamma;
+    for (int i = 0; i < 256; i++)
+        lut[i] = (unsigned char)ImMin(255.0f, ImPow(i / 255.0f, inv_gamma) * 255.0f + 0.5f);
+
+    unsigned char* pixels = (unsigned char*)data->Pixels;
+    int pitch = data->Pitch;
+    if (data->Format == ImTextureFormat_Alpha8)
+    {
+        for (int ny = data->Height; ny > 0; ny--, pixels += pitch)
+        {
+            ImU8* p = (ImU8*)pixels;
+            for (int nx = data->Width; nx > 0; nx--, p++)
+                *p = lut[*p];
+        }
+    }
+    else if (data->Format == ImTextureFormat_RGBA32) //-V547
+    {
+        for (int ny = data->Height; ny > 0; ny--, pixels += pitch)
+        {
+            ImU32* p = (ImU32*)(void*)pixels;
+            for (int nx = data->Width; nx > 0; nx--, p++)
+            {
+                unsigned int a = lut[(*p >> IM_COL32_A_SHIFT) & 0xFF];
+                *p = IM_COL32((*p >> IM_COL32_R_SHIFT) & 0xFF, (*p >> IM_COL32_G_SHIFT) & 0xFF, (*p >> IM_COL32_B_SHIFT) & 0xFF, a);
+            }
+        }
+    }
+    else
+    {
+        IM_ASSERT(0);
+    }
 }
 
 void ImFontAtlasTextureBlockPostProcessMultiply(ImFontAtlasPostProcessData* data, float multiply_factor)
