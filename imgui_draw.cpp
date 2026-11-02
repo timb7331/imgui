@@ -4634,6 +4634,91 @@ static float BuildLoadGlyphGetAdvanceOrFallback(ImFontBaked* baked, unsigned int
 }
 IM_MSVC_RUNTIME_CHECKS_RESTORE
 
+// The same glyph rasterized 'quarter' / 4 pixels to the right, loaded on first use.
+// Returns 'glyph' for a source without SubpixelPositioning. Invalidates 'glyph' when it loads.
+static const ImFontGlyph* ImFontBaked_FindGlyphSubpixel(ImFontBaked* baked, const ImFontGlyph* glyph, int quarter)
+{
+    ImFont* font = baked->OwnerFont;
+    ImFontAtlas* atlas = font->OwnerAtlas;
+    const int src_n = glyph->SourceIdx;
+    const ImWchar codepoint = (ImWchar)glyph->Codepoint;
+    ImFontConfig* src = font->Sources[src_n];
+    if (!src->SubpixelPositioning)
+        return glyph;
+
+    const int slot = (int)codepoint * 3 + quarter - 1;
+    if (slot < baked->SubpixelLookup.Size)
+    {
+        const ImU16 index = baked->SubpixelLookup.Data[slot];
+        if (index == IM_FONTGLYPH_INDEX_NOT_FOUND)
+            return glyph;
+        if (index != IM_FONTGLYPH_INDEX_UNUSED)
+            return &baked->Glyphs.Data[index];
+    }
+    if (atlas->Locked || (font->Flags & ImFontFlags_NoLoadGlyphs))
+        return glyph;
+    if (slot >= baked->SubpixelLookup.Size)
+        baked->SubpixelLookup.resize(((int)codepoint + 1) * 3, IM_FONTGLYPH_INDEX_UNUSED);
+
+    char* loader_user_data_p = (char*)baked->FontLoaderDatas;
+    for (int n = 0; n < src_n; n++)
+    {
+        const ImFontLoader* other_loader = font->Sources[n]->FontLoader ? font->Sources[n]->FontLoader : atlas->FontLoader;
+        loader_user_data_p += other_loader->FontBakedSrcLoaderDataSize;
+    }
+    const ImFontLoader* loader = src->FontLoader ? src->FontLoader : atlas->FontLoader;
+
+    ImFontGlyph glyph_buf;
+    baked->LoadSubpixelX = (float)quarter * 0.25f;
+    const bool loaded = loader->FontBakedLoadGlyph(atlas, src, baked, loader_user_data_p, codepoint, &glyph_buf, NULL);
+    baked->LoadSubpixelX = 0.0f;
+    if (!loaded)
+    {
+        baked->SubpixelLookup.Data[slot] = IM_FONTGLYPH_INDEX_NOT_FOUND;
+        return glyph;
+    }
+    glyph_buf.Codepoint = codepoint;
+    glyph_buf.SourceIdx = src_n;
+
+    // Shares the whole-pixel glyph's layout: adding it must not replace that glyph in the index.
+    const ImU16 whole_index = baked->IndexLookup.Data[codepoint];
+    const float whole_advance = baked->IndexAdvanceX.Data[codepoint];
+    ImFontGlyph* added = ImFontAtlasBakedAddFontGlyph(atlas, baked, src, &glyph_buf);
+    baked->IndexLookup.Data[codepoint] = whole_index;
+    baked->IndexAdvanceX.Data[codepoint] = whole_advance;
+    baked->SubpixelLookup.Data[slot] = (ImU16)baked->Glyphs.index_from_ptr(added);
+    return added;
+}
+
+// The font's kerning source, or NULL when it has none. The password font draws
+// '*' for every character, so the text's own pairs don't apply to it.
+static const ImFontConfig* ImFont_GetKerningSource(const ImFont* font)
+{
+    const ImFontConfig* src = font->Sources.Size > 0 ? font->Sources.Data[0] : NULL;
+    return (src && src->KerningCount > 0 && !(font->Flags & ImFontFlags_NoLoadGlyphs)) ? src : NULL;
+}
+
+static float ImFontConfig_GetKerning(const ImFontConfig* src, float size, unsigned int left, unsigned int right)
+{
+    if (left == 0 || left > 0xFFFF || right > 0xFFFF)
+        return 0.0f;
+    const ImU32 key = (left << 16) | right;
+    int low = 0;
+    int high = src->KerningCount - 1;
+    while (low <= high)
+    {
+        const int mid = (low + high) / 2;
+        const ImU32 mid_key = src->KerningKeys[mid];
+        if (mid_key == key)
+            return (float)src->KerningAdjusts[mid] * size / src->KerningUnits;
+        if (mid_key < key)
+            low = mid + 1;
+        else
+            high = mid - 1;
+    }
+    return 0.0f;
+}
+
 #ifndef IMGUI_DISABLE_DEBUG_TOOLS
 void ImFontAtlasDebugLogTextureRequests(ImFontAtlas* atlas)
 {
@@ -5187,6 +5272,7 @@ void ImFontBaked::ClearOutputData()
     Glyphs.clear();
     IndexAdvanceX.clear();
     IndexLookup.clear();
+    SubpixelLookup.clear();
     FallbackGlyphIndex = -1;
     Ascent = Descent = 0.0f;
     MetricsTotalSurface = 0;
@@ -5663,6 +5749,8 @@ ImVec2 ImFontCalcTextSizeEx(ImFont* font, float size, float max_width, float wra
 
     const bool word_wrap_enabled = (wrap_width > 0.0f);
     const char* word_wrap_eol = NULL;
+    const ImFontConfig* kerning_src = ImFont_GetKerningSource(font);
+    unsigned int prev_c = 0;
 
     const char* s = text_begin;
     while (s < text_end_display)
@@ -5680,6 +5768,7 @@ ImVec2 ImFontCalcTextSizeEx(ImFont* font, float size, float max_width, float wra
                     text_size.x = line_width;
                 text_size.y += line_height;
                 line_width = 0.0f;
+                prev_c = 0;
                 s = ImTextCalcWordWrapNextLineStart(s, text_end, flags); // Wrapping skips upcoming blanks
                 if (flags & ImDrawTextFlags_StopOnNewLine)
                     break;
@@ -5701,6 +5790,7 @@ ImVec2 ImFontCalcTextSizeEx(ImFont* font, float size, float max_width, float wra
             text_size.x = ImMax(text_size.x, line_width);
             text_size.y += line_height;
             line_width = 0.0f;
+            prev_c = 0;
             if (flags & ImDrawTextFlags_StopOnNewLine)
                 break;
             continue;
@@ -5713,6 +5803,9 @@ ImVec2 ImFontCalcTextSizeEx(ImFont* font, float size, float max_width, float wra
         if (char_width < 0.0f)
             char_width = BuildLoadGlyphGetAdvanceOrFallback(baked, c);
         char_width *= scale;
+        if (kerning_src)
+            char_width += ImFontConfig_GetKerning(kerning_src, size, prev_c, c);
+        prev_c = c;
 
         if (line_width + char_width >= max_width)
         {
@@ -5854,6 +5947,9 @@ begin:
 
     const ImU32 col_untinted = col | ~IM_COL32_A_MASK;
     const char* word_wrap_eol = NULL;
+    const ImFontConfig* kerning_src = ImFont_GetKerningSource(this);
+    const bool subpixel_positions = scale == 1.0f && Sources.Size > 0 && Sources.Data[0]->SubpixelPositioning;
+    unsigned int prev_c = 0;
 
     while (s < text_end)
     {
@@ -5867,6 +5963,7 @@ begin:
             {
                 x = origin_x;
                 y += line_height;
+                prev_c = 0;
                 if (y > clip_rect.w)
                     break; // break out of main loop
                 word_wrap_eol = NULL;
@@ -5888,6 +5985,7 @@ begin:
             {
                 x = origin_x;
                 y += line_height;
+                prev_c = 0;
                 if (y > clip_rect.w)
                     break; // break out of main loop
                 continue;
@@ -5896,6 +5994,10 @@ begin:
                 continue;
         }
 
+        if (kerning_src)
+            x += ImFontConfig_GetKerning(kerning_src, size, prev_c, c);
+        prev_c = c;
+
         const ImFontGlyph* glyph = baked->FindGlyph((ImWchar)c);
         //if (glyph == NULL)
         //    continue;
@@ -5903,9 +6005,24 @@ begin:
         float char_width = glyph->AdvanceX * scale;
         if (glyph->Visible)
         {
+            // Quads stay on whole pixels; the fraction of the pen picks the glyph's rasterization.
+            float pen_x = x;
+            if (subpixel_positions)
+            {
+                pen_x = ImFloor(x);
+                int quarter = (int)((x - pen_x) * 4.0f + 0.5f);
+                if (quarter == 4)
+                {
+                    pen_x += 1.0f;
+                    quarter = 0;
+                }
+                if (quarter != 0)
+                    glyph = ImFontBaked_FindGlyphSubpixel(baked, glyph, quarter);
+            }
+
             // We don't do a second finer clipping test on the Y axis as we've already skipped anything before clip_rect.y and exit once we pass clip_rect.w
-            float x1 = x + glyph->X0 * scale;
-            float x2 = x + glyph->X1 * scale;
+            float x1 = pen_x + glyph->X0 * scale;
+            float x2 = pen_x + glyph->X1 * scale;
             float y1 = y + glyph->Y0 * scale;
             float y2 = y + glyph->Y1 * scale;
             if (x1 <= clip_rect.z && x2 >= clip_rect.x)

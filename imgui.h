@@ -3578,6 +3578,11 @@ struct ImFontConfig
     //unsigned int  FontBuilderFlags;       // --       // [Renamed in 1.92] Use FontLoaderFlags.
     float           RasterizerMultiply;     // 1.0f     // Linearly brighten (>1.0f) or darken (<1.0f) font output. Brightening small fonts may be a good workaround to make them more readable. This is a silly thing we may remove in the future.
     float           RasterizerGamma;        // 1.0f     // Coverage curve applied before RasterizerMultiply: alpha = coverage^(1/gamma). ~1.8 approximates linear-light blending for light text on dark backgrounds: partially covered stem pixels fill in, so text reads solid without changing glyph shapes or spacing. Skipped for colored glyphs.
+    bool            SubpixelPositioning;    // false    // FreeType only, keep PixelSnapH off. Advances stay fractional, and each glyph is rasterized at its pen's quarter-pixel position and drawn on whole pixels, so spacing is even without blur. Only applied at the baked size, and only when the font's first source has it.
+    const ImU32*    KerningKeys;            // NULL     // Kerning pairs of the font's first source: (left << 16) | right, sorted ascending. Not owned, must outlive the font.
+    const ImS16*    KerningAdjusts;         // NULL     // Advance change per pair, in KerningUnits.
+    int             KerningCount;           // 0        // Number of pairs.
+    float           KerningUnits;           // 0.0f     // Font units per line height (ascender - descender).
     float           RasterizerDensity;      // 1.0f     // [LEGACY: this only makes sense when ImGuiBackendFlags_RendererHasTextures is not supported] DPI scale multiplier for rasterization. Not altering other font metrics: makes it easy to swap between e.g. a 100% and a 400% fonts for a zooming display, or handle Retina screen. IMPORTANT: If you change this it is expected that you increase/decrease font scale roughly to the inverse of this, otherwise quality may look lowered.
     float           ExtraSizeScale;         // 1.0f     // Extra rasterizer scale over SizePixels.
 
@@ -3833,9 +3838,11 @@ struct ImFontBaked
     ImVector<ImU16>             IndexLookup;        // 12-16 // out // Sparse. Index glyphs by Unicode code-point.
     ImVector<ImFontGlyph>       Glyphs;             // 12-16 // out // All glyphs.
     int                         FallbackGlyphIndex; // 4     // out // Index of FontFallbackChar
+    ImVector<ImU16>             SubpixelLookup;     // 12-16 // out // Sparse. Index of the 1/4, 2/4 and 3/4 pixel glyphs: [codepoint * 3 + quarter - 1]. Whole-pixel glyphs stay in IndexLookup.
 
     // [Internal] Members: Cold
     float                       Ascent, Descent;    // 4+4   // out // Ascent: distance from top to bottom of e.g. 'A' [0..FontSize] (unscaled)
+    float                       LoadSubpixelX;      // 4     //     // Pen offset the font loader rasterizes the next glyph at, for sources with SubpixelPositioning.
     unsigned int                MetricsTotalSurface:26;// 3  // out // Total surface in pixels to get an idea of the font rasterization/texture cost (not exact, we approximate the cost of padding between glyphs)
     unsigned int                WantDestroy:1;         // 0  //     // Queued for destroy
     unsigned int                LoadNoFallback:1;      // 0  //     // Disable loading fallback in lower-level calls.
